@@ -51,12 +51,8 @@ def root_required(f):
     def decorated(*args, **kwargs):
         if 'user_id' not in session:
             return jsonify({'error': 'Authentication required'}), 401
-        
-        conn = get_db()
-        user = conn.execute('SELECT is_root FROM employees WHERE id = ?', (session['user_id'],)).fetchone()
-        conn.close()
-        
-        if not user or user['is_root'] != 1:
+
+        if session.get('is_root') != 1:
             return jsonify({'error': 'Root access required'}), 403
         return f(*args, **kwargs)
     return decorated
@@ -98,6 +94,7 @@ def login():
         })
     
     session['user_id'] = user['id']
+    session['employee_id'] = user['employee_id']
     session['username'] = user['username']
     session['clearance_level'] = user['clearance_level']
     session['is_root'] = user['is_root']
@@ -141,6 +138,7 @@ def verify_2fa():
     try:
         if int(code) == int(user['two_factor_secret']):
             session['user_id'] = user['id']
+            session['employee_id'] = user['employee_id']
             session['username'] = user['username']
             session['clearance_level'] = user['clearance_level']
             session['is_root'] = user['is_root']
@@ -281,8 +279,8 @@ def get_profile():
         'username': user['username'],
         'email': user['email'],
         'department': user['department'],
-        'clearance_level': user['clearance_level'],
-        'is_root': user['is_root']
+        'clearance_level': session.get('clearance_level', user['clearance_level']),
+        'is_root': session.get('is_root', user['is_root'])
     })
 
 @app.route('/api/elevate', methods=['POST'])
@@ -322,23 +320,12 @@ def elevate_privileges():
     
     if valid_approvals >= required_approvals:
         new_is_root = 1 if target_level == 5 else session.get('is_root', 0)
-        conn.execute(
-            'UPDATE employees SET clearance_level = ?, is_root = ? WHERE id = ?',
-            (target_level, new_is_root, session['user_id'])
-        )
-        conn.commit()
-        
         session['clearance_level'] = target_level
         session['is_root'] = new_is_root
-
-        employee_id = conn.execute(
-            'SELECT employee_id FROM employees WHERE id = ?',
-            (session['user_id'],)
-        ).fetchone()['employee_id']
         
         conn.execute(
             'INSERT INTO access_logs (employee_id, action, ip_address) VALUES (?, ?, ?)',
-            (employee_id, f'privilege_elevation_to_level_{target_level}', request.remote_addr)
+            (session['employee_id'], f'privilege_elevation_to_level_{target_level}', request.remote_addr)
         )
         conn.commit()
         conn.close()
